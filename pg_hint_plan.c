@@ -588,6 +588,7 @@ static planner_hook_type prev_planner = NULL;
 static join_search_hook_type prev_join_search = NULL;
 static set_rel_pathlist_hook_type prev_set_rel_pathlist = NULL;
 static ExecutorEnd_hook_type prev_ExecutorEnd = NULL;
+static explain_get_index_name_hook_type prev_explain_get_index_name_hook = NULL;
 
 /* Hold reference to currently active hint */
 static HintState *current_hint_state = NULL;
@@ -661,6 +662,17 @@ pg_hint_ExecutorEnd(QueryDesc *queryDesc)
 		prev_ExecutorEnd(queryDesc);
 	else
 		standard_ExecutorEnd(queryDesc);
+}
+
+static const char *
+pg_hint_explain_get_index_name_hook(Oid indexId)
+{
+	const char *result = NULL;
+
+	if (prev_explain_get_index_name_hook)
+		result = prev_explain_get_index_name_hook(indexId);
+
+	return result;
 }
 
 /*
@@ -754,6 +766,8 @@ _PG_init(void)
 	set_rel_pathlist_hook = pg_hint_plan_set_rel_pathlist;
 	prev_ExecutorEnd = ExecutorEnd_hook;
 	ExecutorEnd_hook = pg_hint_ExecutorEnd;
+	prev_explain_get_index_name_hook = explain_get_index_name_hook;
+	explain_get_index_name_hook = pg_hint_explain_get_index_name_hook;
 
 	/* setup PL/pgSQL plugin hook */
 	var_ptr = (PLpgSQL_plugin **) find_rendezvous_variable("PLpgSQL_plugin");
@@ -3459,9 +3473,15 @@ restrict_indexes(PlannerInfo *root, ScanMethodHint *hint, RelOptInfo *rel,
 	foreach (cell, rel->indexlist)
 	{
 		IndexOptInfo   *info = (IndexOptInfo *) lfirst(cell);
-		char		   *indexname = get_rel_name(info->indexoid);
+		char		   *indexname = NULL;
 		ListCell	   *l;
 		bool			use_index = false;
+
+		if (info->hypothetical)
+			indexname = (char *) explain_get_index_name_hook(info->indexoid);
+
+		if (indexname == NULL)
+			indexname = get_rel_name(info->indexoid);
 
 		foreach(l, hint->indexnames)
 		{
